@@ -1,0 +1,9 @@
+playwright
+playwright-stealth
+streamlit
+fastapi
+uvicorn
+pandas
+pytest
+beautifulsoup4
+SQLAlchemy

@@ -1,0 +1,50 @@
+{
+  "itineraries": [
+    {
+      "price": {
+        "amount": 64.0,
+        "currency": "USD",
+        "status": "verified"
+      },
+      "outbound": {
+        "carrier": "IndiGo",
+        "duration_minutes": 235,
+        "segments": [
+          {
+            "marketing_carrier_code": "6E",
+            "flight_number": "5014",
+            "operating_carrier_name": "IndiGo",
+            "departure_airport": "DEL",
+            "departure_time_local": "2026-09-05T18:30:00",
+            "departure_timezone": "Asia/Kolkata",
+            "departure_time_utc": "2026-09-05T13:00:00Z",
+            "arrival_airport": "BDQ",
+            "arrival_time_local": "2026-09-05T19:55:00",
+            "arrival_timezone": "Asia/Kolkata",
+            "arrival_time_utc": "2026-09-05T14:25:00Z",
+            "duration_minutes": 85,
+            "aircraft": "Airbus A321neo"
+          },
+          {
+            "marketing_carrier_code": "6E",
+            "flight_number": "679",
+            "operating_carrier_name": "IndiGo",
+            "departure_airport": "BDQ",
+            "departure_time_local": "2026-09-05T21:00:00",
+            "departure_timezone": "Asia/Kolkata",
+            "departure_time_utc": "2026-09-05T15:30:00Z",
+            "arrival_airport": "BOM",
+            "arrival_time_local": "2026-09-05T22:25:00",
+            "arrival_timezone": "Asia/Kolkata",
+            "arrival_time_utc": "2026-09-05T16:55:00Z",
+            "duration_minutes": 85,
+            "aircraft": "Airbus A320neo"
+          }
+        ]
+      },
+      "cabin_class": "economy",
+      "requires_self_transfer": false,
+      "ignav_id": "e204ac16ef34410ca5df0714125ffb15"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+collection_date,advance_days,travel_date,origin,destination,airline,carrier_codes,flight_numbers,departure_airport,arrival_airport,departure_time,arrival_time,duration_minutes,number_of_segments,stops,price,currency,price_status,cabin_class,self_transfer,ignav_id
+2026-08-30,6,2026-09-05,DEL,BOM,IndiGo,"6E,6E","5014,679",DEL,BOM,2026-09-05T18:30:00,2026-09-05T22:25:00,235,2,1,64.0,USD,verified,economy,False,e204ac16ef34410ca5df0714125ffb15
