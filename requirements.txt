@@ -7,3 +7,5 @@ pandas
 pytest
 beautifulsoup4
 SQLAlchemy
+python-dotenv
+requests

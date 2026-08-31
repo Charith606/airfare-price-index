@@ -1,115 +1,52 @@
+from __future__ import annotations
+
 import os
-from dotenv import load_dotenv
-import snowflake.connector
+from pathlib import Path
 
-load_dotenv()
+from sqlalchemy import create_engine
 
-def get_connection():
-    """Return a connection to the Snowflake database."""
-    conn = snowflake.connector.connect(
-        user=os.getenv('SNOWFLAKE_USER'),
-        password=os.getenv('SNOWFLAKE_PASSWORD'),
-        account=os.getenv('SNOWFLAKE_ACCOUNT'),
-        warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
-        database=os.getenv('SNOWFLAKE_DATABASE'),
-        schema=os.getenv('SNOWFLAKE_SCHEMA')
-    )
-    return conn
+try:
+    import mysql.connector
+except ImportError:
+    mysql.connector = None  # type: ignore[assignment]
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+
+# Path to the bundled SQLite database
+_SQLITE_DB = Path(__file__).resolve().parents[2] / "data" / "airfare_index.db"
+
 
 def get_sqlalchemy_engine():
-    """Return a SQLAlchemy engine for Pandas integration."""
-    from sqlalchemy import create_engine
-    
-    user = os.getenv('SNOWFLAKE_USER')
-    password = os.getenv('SNOWFLAKE_PASSWORD')
-    account = os.getenv('SNOWFLAKE_ACCOUNT')
-    warehouse = os.getenv('SNOWFLAKE_WAREHOUSE')
-    database = os.getenv('SNOWFLAKE_DATABASE')
-    schema = os.getenv('SNOWFLAKE_SCHEMA')
-    
-    # URL format: snowflake://<user_login_name>:<password>@<account_identifier>/<database_name>/<schema_name>?warehouse=<warehouse_name>
-    connection_string = f"snowflake://{user}:{password}@{account}/{database}/{schema}?warehouse={warehouse}"
-    return create_engine(connection_string)
+    """Return a SQLAlchemy engine connected to the local SQLite database."""
+    return create_engine(f"sqlite:///{_SQLITE_DB}")
 
-def init_db():
-    """Initialize the database schema in Snowflake."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Raw Quotes Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS raw_quotes (
-                id NUMBER AUTOINCREMENT,
-                collection_date VARCHAR,
-                travel_date VARCHAR,
-                origin VARCHAR,
-                destination VARCHAR,
-                airline VARCHAR,
-                price FLOAT,
-                currency VARCHAR,
-                departure_time VARCHAR,
-                fare_type VARCHAR,
-                advance_days NUMBER
-            )
-        """)
-        
-        # Routes Table for Index Weights
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS routes (
-                id NUMBER AUTOINCREMENT,
-                origin VARCHAR,
-                destination VARCHAR,
-                route_weight FLOAT
-            )
-        """)
-        
-        # Cleaned Fares Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cleaned_fares (
-                id NUMBER AUTOINCREMENT,
-                quote_id NUMBER,
-                collection_date VARCHAR,
-                travel_date VARCHAR,
-                origin VARCHAR,
-                destination VARCHAR,
-                airline VARCHAR,
-                base_fare FLOAT,
-                taxes FLOAT,
-                total_fare FLOAT,
-                advance_days NUMBER
-            )
-        """)
-        
-        # Index Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS price_index (
-                id NUMBER AUTOINCREMENT,
-                index_date VARCHAR,
-                frequency VARCHAR,
-                index_value FLOAT
-            )
-        """)
-        
-        # Insert some dummy routes if empty
-        cursor.execute("SELECT COUNT(*) FROM routes")
-        result = cursor.fetchone()
-        if result and result[0] == 0:
-            cursor.execute("""
-                INSERT INTO routes (origin, destination, route_weight) 
-                VALUES ('DEL', 'BOM', 0.3),
-                       ('DEL', 'BLR', 0.25),
-                       ('BOM', 'BLR', 0.2),
-                       ('DEL', 'CCU', 0.15),
-                       ('BLR', 'HYD', 0.1)
-            """)
-            
-        print("Snowflake Database schema initialized successfully.")
-    except Exception as e:
-        print(f"Error initializing Snowflake: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
-if __name__ == "__main__":
-    init_db()
+def get_connection():
+    """Return a MySQL connection to the existing airfare database."""
+    if mysql.connector is None:
+        raise RuntimeError(
+            "mysql-connector-python is not installed. "
+            "Install it with: pip install mysql-connector-python"
+        )
+
+    required = ("MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE")
+    missing = [key for key in required if not os.getenv(key)]
+
+    if missing:
+        raise RuntimeError(
+            "Missing database settings in .env: " + ", ".join(missing)
+        )
+
+    return mysql.connector.connect(
+        host=os.environ["MYSQL_HOST"],
+        port=int(os.getenv("MYSQL_PORT", "3306")),
+        user=os.environ["MYSQL_USER"],
+        password=os.environ["MYSQL_PASSWORD"],
+        database=os.environ["MYSQL_DATABASE"],
+        autocommit=False,
+    )

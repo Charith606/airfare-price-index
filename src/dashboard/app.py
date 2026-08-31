@@ -3,6 +3,12 @@ import pandas as pd
 import sqlite3
 from pathlib import Path
 import os
+import sys
+
+# Ensure project root is on sys.path so `src.config` imports work
+_project_root = str(Path(__file__).resolve().parents[2])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 # Set page config
 st.set_page_config(page_title="Real-time Airfare Price Index (APIx)", layout="wide")
@@ -13,14 +19,14 @@ st.markdown("Augmentation of the Consumer Price Index (CPI) using automated web 
 # Database path
 DB_PATH = Path(__file__).resolve().parents[2] / 'data' / 'airfare_index.db'
 
-from src.config.database import get_sqlalchemy_engine
-
+@st.cache_data
 def load_data():
-    engine = get_sqlalchemy_engine()
-    fares_df = pd.read_sql_query("SELECT * FROM cleaned_fares", engine)
-    index_df = pd.read_sql_query("SELECT * FROM price_index WHERE frequency='daily'", engine)
+    conn = sqlite3.connect(str(DB_PATH))
+    fares_df = pd.read_sql_query("SELECT * FROM cleaned_fares", conn)
+    index_df = pd.read_sql_query("SELECT * FROM price_index WHERE frequency='daily'", conn)
+    conn.close()
     
-    # lowercase columns because Snowflake returns them uppercase
+    # lowercase columns for consistency
     fares_df.columns = fares_df.columns.str.lower()
     index_df.columns = index_df.columns.str.lower()
     
