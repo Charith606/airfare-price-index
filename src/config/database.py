@@ -7,8 +7,9 @@ from sqlalchemy import create_engine
 
 try:
     import mysql.connector
+    HAS_MYSQL = True
 except ImportError:
-    mysql.connector = None  # type: ignore[assignment]
+    HAS_MYSQL = False
 
 try:
     from dotenv import load_dotenv
@@ -28,7 +29,7 @@ def get_sqlalchemy_engine():
 
 def get_connection():
     """Return a MySQL connection to the existing airfare database."""
-    if mysql.connector is None:
+    if not HAS_MYSQL:
         raise RuntimeError(
             "mysql-connector-python is not installed. "
             "Install it with: pip install mysql-connector-python"
