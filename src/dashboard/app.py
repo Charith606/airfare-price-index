@@ -316,12 +316,20 @@ if portal == "🌐 Public User Portal":
                     origin_select = st.selectbox("Origin Airport", ["All"] + origins)
                     
                 with col2:
-                    destinations = sorted(fares_df['destination'].unique())
-                    dest_select = st.selectbox("Destination Airport", ["All"] + destinations)
+                    if origin_select != "All":
+                        valid_dests = sorted(fares_df[fares_df['origin'] == origin_select]['destination'].unique())
+                    else:
+                        valid_dests = sorted(fares_df['destination'].unique())
+                    dest_select = st.selectbox("Destination Airport", ["All"] + valid_dests)
                     
                 with col3:
-                    airlines = sorted(fares_df['airline'].unique())
-                    airline_select = st.selectbox("Airline", ["All"] + airlines)
+                    if origin_select != "All" and dest_select != "All":
+                        valid_airlines = sorted(fares_df[(fares_df['origin'] == origin_select) & (fares_df['destination'] == dest_select)]['airline'].unique())
+                    elif origin_select != "All":
+                        valid_airlines = sorted(fares_df[fares_df['origin'] == origin_select]['airline'].unique())
+                    else:
+                        valid_airlines = sorted(fares_df['airline'].unique())
+                    airline_select = st.selectbox("Airline", ["All"] + valid_airlines)
                     
                 # Filtering database logic
                 filtered_df = fares_df.copy()
