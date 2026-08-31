@@ -339,34 +339,48 @@ if portal == "🌐 Public User Portal":
             if origin_val == dest_val:
                 st.error("Origin and destination airports must be different.")
             else:
-                with st.spinner(f"Fetching real-time flights for {origin_val} ➔ {dest_val}..."):
+                with st.spinner(f"Connecting to live web server and scraping real-time flights for {origin_val} ➔ {dest_val}..."):
                     results = []
+                    scrape_error = None
                     
-                    # 1. Try Live Web Scraper
-                    try:
+                    # Run scraper in a separate isolated thread to avoid event loop conflicts in Streamlit
+                    def _run_scraper_sync():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
                         scraper = OTAScraper(headless=True)
-                        results = asyncio.run(scraper.scrape_route(origin_val, dest_val, travel_date_val))
-                    except Exception as scrape_err:
-                        pass
+                        try:
+                            return loop.run_until_complete(scraper.scrape_route(origin_val, dest_val, travel_date_val))
+                        finally:
+                            loop.close()
+                            
+                    try:
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(_run_scraper_sync)
+                            results = future.result(timeout=45)
+                    except Exception as err:
+                        scrape_error = err
                         
-                    # 2. If scraper returned results, display them
+                    # If live results are returned, display them
                     if results:
                         results = sorted(results, key=lambda x: float(x.get('price', x.get('total_fare', 0))))
-                        st.subheader(f"Found {len(results)} Flights for {origin_val} ➔ {dest_val}")
-                        st.caption("🟢 Live real-time pricing extracted from web")
+                        st.subheader(f"Found {len(results)} Real-time Flights for {origin_val} ➔ {dest_val}")
+                        st.caption("🟢 Live real-time pricing extracted directly from web search")
                         for index, flight in enumerate(results):
                             render_flight_card(flight, is_cheapest=(index == 0))
                     else:
-                        # 3. Fallback to database quotes for this route if scraper is blocked
+                        if scrape_error:
+                            st.error(f"Live web connection issue: {scrape_error}")
+                        # Fallback to database quotes
                         db_matches = fares_df[(fares_df['origin'] == origin_val) & (fares_df['destination'] == dest_val)]
                         if not db_matches.empty:
                             db_matches = db_matches.sort_values(by="total_fare")
-                            st.subheader(f"Found {len(db_matches)} Flights for {origin_val} ➔ {dest_val}")
-                            st.caption("📂 Verified database flight records")
+                            st.subheader(f"Showing {len(db_matches)} Historical Database Flights for {origin_val} ➔ {dest_val}")
+                            st.caption("📂 Offline database flight records (Scraper was unable to load live page)")
                             for index, row in db_matches.reset_index(drop=True).iterrows():
                                 render_flight_card(row.to_dict(), is_cheapest=(index == 0))
                         else:
-                            st.warning(f"No flights found for {origin_val} ➔ {dest_val} on {travel_date_val}. Try another route or check the live scraper.")
+                            st.warning(f"No flights found for {origin_val} ➔ {dest_val} on {travel_date_val}.")
 
 # ----------------- 🔐 MOSPI AUTHORIZED ADMIN PORTAL -----------------
 else:
