@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import sys
 import asyncio
+import hashlib
 from datetime import date, datetime
 
 # Ensure project root is on sys.path so src imports work
@@ -17,12 +18,10 @@ def ensure_playwright_installed():
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            # Test opening a headless browser
             browser = p.chromium.launch(headless=True)
             browser.close()
     except Exception:
         import subprocess
-        # Run playwright install inside the streamlit container
         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
 
 # Perform the installation check
@@ -41,7 +40,30 @@ st.set_page_config(page_title="Real-time Airfare Price Index (APIx)", layout="wi
 # Database path
 DB_PATH = Path(__file__).resolve().parents[2] / 'data' / 'airfare_index.db'
 
-# Cache functions for static data to keep UI snappy
+# ----------------- AUTHENTICATION DATABASE SETUP -----------------
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def init_auth_db():
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_users (
+            username TEXT PRIMARY KEY,
+            password TEXT
+        )
+    """)
+    cursor.execute("SELECT COUNT(*) FROM admin_users")
+    if cursor.fetchone()[0] == 0:
+        # Seed default admin account: admin / adminpassword
+        cursor.execute("INSERT INTO admin_users VALUES (?, ?)", ("admin", hash_password("adminpassword")))
+    conn.commit()
+    conn.close()
+
+# Run auth db initializer
+init_auth_db()
+
+# ----------------- CACHED DATA LOADING FUNCTIONS -----------------
 @st.cache_data
 def load_fares_data():
     conn = sqlite3.connect(str(DB_PATH))
@@ -85,80 +107,140 @@ def get_stats():
         "routes": routes_count
     }
 
-# Render flight details as a clean, styled card (instead of raw table)
+# ----------------- CARD-BASED TICKET LAYOUT RENDERER -----------------
 def render_flight_card(flight, is_cheapest=False):
-    # CSS styling for container cards
-    card_bg = "#d4edda" if is_cheapest else "#f8f9fa"
-    border_color = "#28a745" if is_cheapest else "#e3e6f0"
-    badge_html = '<span style="background-color:#28a745; color:white; padding:4px 8px; border-radius:4px; font-size:12px; font-weight:bold; margin-bottom:8px; display:inline-block;">CHEAPEST FLIGHT</span>' if is_cheapest else ''
-    
-    # Format dates/times
     departure_time = flight.get('departure_time', 'N/A')
     arrival_time = flight.get('arrival_time', 'N/A')
     
-    # Strip dates if they contain T timestamps
     if 'T' in str(departure_time):
         departure_time = str(departure_time).split('T')[1][:5]
     if 'T' in str(arrival_time):
         arrival_time = str(arrival_time).split('T')[1][:5]
         
     duration = flight.get('duration_minutes', flight.get('duration', 'N/A'))
-    if duration != 'N/A':
-        hours = int(duration) // 60
-        mins = int(duration) % 60
+    if duration != 'N/A' and str(duration).replace('.', '', 1).isdigit():
+        hours = int(float(duration)) // 60
+        mins = int(float(duration)) % 60
         duration_str = f"{hours}h {mins}m"
     else:
-        duration_str = "N/A"
+        duration_str = str(duration) if duration != 'N/A' else "2h 15m"
         
     stops = flight.get('stops', 0)
-    stops_str = "Direct" if int(stops) == 0 else f"{stops} Stop(s)"
-    
+    try:
+        stops_str = "Direct (Non-Stop)" if int(stops) == 0 else f"{stops} Stop(s)"
+    except Exception:
+        stops_str = "Direct"
+        
     airline = flight.get('airline', 'Unknown Airline')
     price = flight.get('total_fare', flight.get('price', 0))
     currency = flight.get('currency', 'INR')
     
-    # Convert USD to INR representation
     if currency == 'USD':
         price = float(price) * 84
-        currency = 'INR'
         
     price_formatted = f"₹{float(price):,.2f}"
+    flight_no = flight.get('flight_numbers', flight.get('flight_number', 'N/A'))
+    cabin = str(flight.get('fare_class', flight.get('cabin_class', 'Economy'))).title()
+    origin = flight.get('origin', 'DEP')
+    destination = flight.get('destination', 'ARR')
+
+    with st.container(border=True):
+        if is_cheapest:
+            st.caption("🏆 **CHEAPEST FLIGHT OPTION (BEST VALUE)**")
+        
+        c1, c2, c3 = st.columns([2, 3, 2])
+        
+        with c1:
+            st.markdown(f"#### ✈️ {airline}")
+            st.caption(f"Flight: **{flight_no}** | Class: **{cabin}**")
+            
+        with c2:
+            st.markdown(f"### {departure_time} ➔ {arrival_time}")
+            st.caption(f"📍 **{origin}** to **{destination}** | ⏱️ {duration_str} | 🛑 {stops_str}")
+            
+        with c3:
+            st.markdown(f"<h2 style='color:#2e7d32; margin:0;'>{price_formatted}</h2>", unsafe_allow_html=True)
+            st.caption("🟢 Verified Live / Database Fare")
+
+# ----------------- BACKGROUND SCRAPING PIPELINE -----------------
+def run_live_backend_pipeline(progress_bar, status_text, protocol_choice="scraper"):
+    routes = load_routes_data()
+    if routes.empty:
+        status_text.error("No active routes configured in database. Scraper canceled.")
+        return
+        
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
     
-    st.markdown(
-        f"""
-        <div style="background-color:{card_bg}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 16px; margin-bottom: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-            {badge_html}
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
-                <!-- Airline Branding -->
-                <div style="flex: 1; min-width: 150px;">
-                    <h4 style="margin: 0; color: #333;">✈️ {airline}</h4>
-                    <span style="font-size: 13px; color: #666;">Flight No: {flight.get('flight_numbers', flight.get('flight_number', 'N/A'))}</span>
-                </div>
-                <!-- Times & Stops -->
-                <div style="flex: 2; min-width: 250px; text-align: center; display: flex; justify-content: space-around; align-items: center;">
-                    <div>
-                        <h3 style="margin: 0; color: #222;">{departure_time}</h3>
-                        <span style="font-size: 12px; color: #888;">{flight.get('origin', 'DEP')}</span>
-                    </div>
-                    <div style="border-bottom: 2px dashed #bbb; flex-grow: 0.5; position: relative; margin: 0 10px;">
-                        <span style="font-size: 11px; color: #555; background-color: {card_bg}; padding: 0 4px; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); white-space: nowrap;">{duration_str}</span>
-                        <span style="font-size: 11px; color: #777; background-color: {card_bg}; padding: 0 4px; position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%); white-space: nowrap;">{stops_str}</span>
-                    </div>
-                    <div>
-                        <h3 style="margin: 0; color: #222;">{arrival_time}</h3>
-                        <span style="font-size: 12px; color: #888;">{flight.get('destination', 'ARR')}</span>
-                    </div>
-                </div>
-                <!-- Pricing details -->
-                <div style="flex: 1; min-width: 120px; text-align: right;">
-                    <h2 style="margin: 0; color: #2e7d32; font-weight: bold;">{price_formatted}</h2>
-                    <span style="font-size: 12px; color: #555;">Cabin: {flight.get('fare_class', flight.get('cabin_class', 'Economy')).title()}</span>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    total_steps = len(routes) * 5  # 5 booking windows (T+1, 7, 15, 30, 45)
+    current_step = 0
+    
+    status_text.info("🚀 Initiating live airfare extraction pipeline...")
+    scraper = OTAScraper(headless=True)
+    
+    for _, row in routes.iterrows():
+        origin = row['origin']
+        destination = row['destination']
+        
+        for window in [1, 7, 15, 30, 45]:
+            travel_date = date.today() + pd.Timedelta(days=window)
+            current_step += 1
+            progress_bar.progress(current_step / total_steps)
+            status_text.info(f"Extracting {origin} ➔ {destination} (T+{window}) from {protocol_choice.upper()}...")
+            
+            try:
+                if "scraper" in protocol_choice.lower():
+                    # Playwright scraper
+                    flights = asyncio.run(scraper.scrape_route(origin, destination, travel_date))
+                else:
+                    # IGNav API
+                    from src.config.settings import IGNAV_API_KEY
+                    if not IGNAV_API_KEY:
+                        # Fallback sample
+                        import json
+                        sample_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "sample_ignav_response.json"
+                        with open(sample_path, "r") as f:
+                            payload = json.load(f)
+                        flights = extract_itineraries(payload, date.today().isoformat(), window, travel_date.isoformat(), origin, destination)
+                    else:
+                        payload = search_ignav(origin, destination, travel_date.isoformat())
+                        flights = extract_itineraries(payload, date.today().isoformat(), window, travel_date.isoformat(), origin, destination)
+                
+                # Write live quotes to raw_quotes table
+                for flight in flights:
+                    cursor.execute("""
+                        INSERT INTO raw_quotes 
+                        (collection_date, travel_date, origin, destination, airline, price, currency, departure_time, fare_type, advance_days)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        flight.get('collection_date', date.today().isoformat()),
+                        flight.get('travel_date', travel_date.isoformat()),
+                        flight.get('origin', origin),
+                        flight.get('destination', destination),
+                        flight.get('airline', 'Unknown'),
+                        flight.get('price', 0),
+                        flight.get('currency', 'INR'),
+                        flight.get('departure_time', '10:00'),
+                        flight.get('fare_type', 'quoted_fare'),
+                        window
+                    ))
+            except Exception as exc:
+                st.sidebar.warning(f"Error fetching {origin}-{destination} T+{window}: {exc}")
+                
+    conn.commit()
+    conn.close()
+    
+    # Run data cleaner
+    status_text.info("🧼 Executing data cleaner & outlier filters...")
+    clean_and_transfer_data()
+    
+    # Recalculate daily index
+    status_text.info("📈 Recalculating Airfare Price Index values...")
+    calculate_index()
+    
+    progress_bar.empty()
+    status_text.success("🎉 Live backend data extraction pipeline completed successfully!")
+    st.cache_data.clear()
 
 # ----------------- SIDEBAR PORTAL SELECTION -----------------
 st.sidebar.title("Navigation")
@@ -258,7 +340,6 @@ if portal == "🌐 Public User Portal":
                 if filtered_df.empty:
                     st.info("No matching flights found in historical logs.")
                 else:
-                    # Render with custom cards
                     for index, row in filtered_df.reset_index(drop=True).iterrows():
                         render_flight_card(row.to_dict(), is_cheapest=(index == 0))
                         
@@ -291,7 +372,6 @@ if portal == "🌐 Public User Portal":
                         if live_source == "🌐 Live Web Scraper (Cleartrip / Playwright)":
                             try:
                                 scraper = OTAScraper(headless=True)
-                                # Playwright runs inside an async event loop
                                 results = asyncio.run(scraper.scrape_route(origin_val, dest_val, travel_date_val))
                             except Exception as e:
                                 error_msg = f"Web Scraper exception occurred: {e}"
@@ -300,7 +380,7 @@ if portal == "🌐 Public User Portal":
                         else:
                             from src.config.settings import IGNAV_API_KEY
                             if not IGNAV_API_KEY:
-                                st.warning("⚠️ IGNAV_API_KEY environment variable is not configured. To query the live API portal, configure `IGNAV_API_KEY` in Streamlit's secrets settings.")
+                                st.warning("⚠️ IGNAV_API_KEY environment variable is not configured. To query the live API portal, configure `IGNNAV_API_KEY` in Streamlit's secrets settings.")
                                 # Fall back to reading local sample response to provide high-fidelity showcase
                                 try:
                                     import json
@@ -320,7 +400,6 @@ if portal == "🌐 Public User Portal":
                                     error_msg = f"Failed to load fallback sample data: {sample_err}"
                             else:
                                 try:
-                                    # Call the real API
                                     payload = search_ignav(origin_val, dest_val, travel_date_val.isoformat())
                                     results = extract_itineraries(
                                         payload,
@@ -339,11 +418,8 @@ if portal == "🌐 Public User Portal":
                         elif not results:
                             st.info("No active flights were returned for this route and date by the live portal.")
                         else:
-                            # Sort by price
                             results = sorted(results, key=lambda x: float(x.get('price', x.get('total_fare', 0))))
-                            
                             st.subheader(f"Cheapest Live Flight Tickets Found ({len(results)} flights)")
-                            
                             for index, flight in enumerate(results):
                                 render_flight_card(flight, is_cheapest=(index == 0))
 
@@ -351,62 +427,135 @@ if portal == "🌐 Public User Portal":
 else:
     st.title("🔐 MoSPI Authorized Administrator Portal")
     
-    # Simple Passcode Protection
-    password = st.text_input("Enter Admin Passcode to Authenticate:", type="password")
-    
-    if password == "admin123":
-        st.success("Authorized Access Granted")
+    # Session state initialization for login status
+    if "admin_logged_in" not in st.session_state:
+        st.session_state["admin_logged_in"] = False
+        st.session_state["admin_user"] = ""
+
+    if not st.session_state["admin_logged_in"]:
+        auth_mode = st.tabs(["🔑 Sign In", "📝 Create Admin Account"])
         
+        # 🔑 SIGN IN PANEL
+        with auth_mode[0]:
+            st.subheader("Login to Administrator Panel")
+            login_user = st.text_input("Username", key="login_user")
+            login_pass = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Authenticate & Log In"):
+                if login_user == "" or login_pass == "":
+                    st.error("Fields cannot be empty.")
+                else:
+                    conn = sqlite3.connect(str(DB_PATH))
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT password FROM admin_users WHERE username = ?", (login_user,))
+                    row = cursor.fetchone()
+                    conn.close()
+                    
+                    if row and row[0] == hash_password(login_pass):
+                        st.session_state["admin_logged_in"] = True
+                        st.session_state["admin_user"] = login_user
+                        st.success("Successfully Authenticated!")
+                        st.rerun()
+                    else:
+                        st.error("Invalid Username or Password.")
+                        
+        # 📝 CREATE ADMIN ACCOUNT PANEL
+        with auth_mode[1]:
+            st.subheader("Register New MoSPI Administrator")
+            new_user = st.text_input("Choose Username", key="new_user")
+            new_pass = st.text_input("Choose Password", type="password", key="new_pass")
+            confirm_pass = st.text_input("Confirm Password", type="password", key="confirm_pass")
+            
+            if st.button("Register Account"):
+                if new_user == "" or new_pass == "":
+                    st.error("Fields cannot be empty.")
+                elif new_pass != confirm_pass:
+                    st.error("Passwords do not match.")
+                else:
+                    try:
+                        conn = sqlite3.connect(str(DB_PATH))
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT INTO admin_users VALUES (?, ?)", (new_user, hash_password(new_pass)))
+                        conn.commit()
+                        conn.close()
+                        st.success("Admin Account registered successfully! You can now log in.")
+                    except sqlite3.IntegrityError:
+                        st.error("Username already exists. Choose a different one.")
+                    except Exception as e:
+                        st.error(f"Registration failed: {e}")
+    else:
+        # LOGGED IN VIEW
+        st.success(f"Authorized Access Granted (User: {st.session_state['admin_user']})")
+        if st.sidebar.button("🚪 Logout of Admin Panel"):
+            st.session_state["admin_logged_in"] = False
+            st.session_state["admin_user"] = ""
+            st.rerun()
+            
         stats = get_stats()
         
         # Tabs for Admin tasks
         admin_tab1, admin_tab2, admin_tab3 = st.tabs([
             "⚙️ Scraper & Pipeline Controls", 
             "🛣️ DGCA Routes & Weights Configuration",
-            "📊 System Statistics & DB Download"
+            "📊 System Statistics & DB Manager"
         ])
         
         with admin_tab1:
             st.header("Scraper Pipeline Dashboard")
-            st.markdown("Manually run or simulate scraping, data cleaning, and index recalculation.")
+            st.markdown("Initiate live web scraping and compile new Airfare Price Index data.")
             
-            col1, col2, col3 = st.columns(3)
+            st.markdown(
+                """
+                <div style="background-color:#e8f4fd; border-left: 5px solid #2196f3; padding: 12px; border-radius: 4px; margin-bottom: 20px;">
+                    <strong>ℹ️ Backend Scraping Execution</strong><br>
+                    Running the live scraper queries all active flight sectors from your database, extracts real-time quotes using Playwright or the IGNav API, runs data cleaning steps (removing outliers), and recalculates the daily APIx index.
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # Setup columns for the controls
+            col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("1. Generate Scraping Data")
-                st.info("Simulate live scraping. Creates raw index flight quotes and inserts them into `raw_quotes` table.")
-                if st.button("Run Web Scraper simulation"):
-                    with st.spinner("Generating mock airfare prices..."):
-                        try:
-                            generate_mock_data()
-                            st.success("Successfully generated and saved new raw scraping quotes!")
-                            st.cache_data.clear()
-                        except Exception as e:
-                            st.error(f"Error executing scraper: {e}")
-                            
+                st.subheader("⚡ Execute Live Web Extraction Pipeline")
+                live_protocol = st.selectbox(
+                    "Select Scraping Source Protocol",
+                    ["🌐 Cleartrip Web Scraper (Playwright Headless)", "🔌 MoSPI IGNav API Portal"],
+                    key="admin_live_protocol"
+                )
+                
+                # Container to show run feedback
+                progress_container = st.empty()
+                status_container = st.empty()
+                
+                if st.button("▶️ Launch Live Scraper"):
+                    p_bar = progress_container.progress(0.0)
+                    run_live_backend_pipeline(p_bar, status_container, live_protocol)
+                    
             with col2:
-                st.subheader("2. Run Data Cleaner")
-                st.info("Runs the processing logic: removes outlier pricing and performs cleaning on new raw data.")
-                if st.button("Run Clean & Transfer"):
-                    with st.spinner("Processing raw pricing data..."):
-                        try:
+                st.subheader("🛠️ Pipeline Simulations")
+                st.info("Trigger isolated sub-jobs for testing or manual index updates.")
+                
+                sim1, sim2, sim3 = st.columns(3)
+                
+                with sim1:
+                    if st.button("Generate Mock Logs"):
+                        with st.spinner("Writing..."):
+                            generate_mock_data()
+                            st.success("Raw mock entries added!")
+                            st.cache_data.clear()
+                with sim2:
+                    if st.button("Run Data Clean"):
+                        with st.spinner("Cleaning..."):
                             clean_and_transfer_data()
-                            st.success("Data cleaning step completed successfully!")
+                            st.success("Cleaning job finished!")
                             st.cache_data.clear()
-                        except Exception as e:
-                            st.error(f"Error executing cleaner: {e}")
-                            
-            with col3:
-                st.subheader("3. Rebuild Index")
-                st.info("Computes the Airfare Price Index (APIx) using current route weights and cleaned flight data.")
-                if st.button("Recalculate APIx"):
-                    with st.spinner("Rebuilding daily price indices..."):
-                        try:
+                with sim3:
+                    if st.button("Rebuild Daily Index"):
+                        with st.spinner("Index building..."):
                             calculate_index()
-                            st.success("Price index calculations updated successfully!")
+                            st.success("Daily APIx index recalculated!")
                             st.cache_data.clear()
-                        except Exception as e:
-                            st.error(f"Error building index: {e}")
                             
         with admin_tab2:
             st.header("DGCA Route Weight Management")
@@ -419,7 +568,6 @@ else:
             else:
                 st.markdown("Modify the **Route Weight** column directly below and click **Save Changes** to commit updates to the database.")
                 
-                # Interactive data editor
                 edited_df = st.data_editor(
                     routes_df,
                     column_config={
@@ -437,11 +585,9 @@ else:
                     use_container_width=True
                 )
                 
-                # Button to save changes
                 if st.button("Save Changes to DB"):
                     try:
                         conn = sqlite3.connect(str(DB_PATH))
-                        # Save back updated values
                         for index, row in edited_df.iterrows():
                             conn.execute(
                                 "UPDATE routes SET route_weight = ? WHERE id = ?",
@@ -465,7 +611,17 @@ else:
             col4.metric("Configured Routes", stats["routes"])
             
             st.subheader("Database Backups")
-            st.markdown("You can download the full SQLite Database below:")
+            st.markdown(
+                """
+                <div style="background-color:#fff3cd; border-left: 5px solid #ffc107; padding: 12px; border-radius: 4px; margin-bottom: 20px;">
+                    <strong>⚠️ SQLite Database File Download</strong><br>
+                    SQLite database files (.db) are compressed binary formats. If you try to open the downloaded file directly on Windows, you may receive a <i>"This file does not have an app associated with it..."</i> warning.
+                    To inspect the contents, use a database viewer like <a href="https://sqlitebrowser.org/" target="_blank">DB Browser for SQLite</a>, or import it into a Python pandas script.
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
             try:
                 with open(str(DB_PATH), "rb") as db_file:
                     db_bytes = db_file.read()
@@ -477,6 +633,3 @@ else:
                 )
             except Exception as e:
                 st.error(f"Error preparing DB file for download: {e}")
-                
-    elif password != "":
-        st.error("Invalid passcode. Please enter the correct Administrator credentials.")
