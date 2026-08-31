@@ -20,9 +20,9 @@ def ensure_playwright_installed():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             browser.close()
-    except Exception:
+    except Exception as e:
         import subprocess
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+        subprocess.run([sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"])
 
 # Perform the installation check
 ensure_playwright_installed()
