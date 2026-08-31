@@ -1,10 +1,11 @@
 import sqlite3
 import random
+from pathlib import Path
 from datetime import date, timedelta
-from src.config.database import get_connection
+from src.config.database import _SQLITE_DB
 
 def generate_mock_data():
-    conn = get_connection()
+    conn = sqlite3.connect(str(_SQLITE_DB))
     cursor = conn.cursor()
     
     # Generate 35 days of data for backtesting requirement
@@ -32,7 +33,7 @@ def generate_mock_data():
     cursor.executemany("""
         INSERT INTO raw_quotes 
         (collection_date, travel_date, origin, destination, airline, price, currency, departure_time, fare_type, advance_days)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, records)
                 
     conn.commit()

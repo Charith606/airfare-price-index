@@ -47,18 +47,16 @@ def calculate_index(frequency: str = 'daily'):
         # Save to DB
         records = daily_index[['index_date', 'frequency', 'index_value']]
         
-        # Clear existing daily index for simplicity, or we could upsert
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM price_index WHERE frequency='daily'")
-        conn.commit()
-        conn.close()
+        # Clear existing daily index using the SQLAlchemy engine
+        with engine.begin() as conn:
+            conn.execute("DELETE FROM price_index WHERE frequency='daily'")
         
         records.to_sql('price_index', engine, if_exists='append', index=False)
         print(f"Calculated and updated {frequency} index for {len(records)} days.")
         
     except Exception as e:
         print(f"Error calculating index: {e}")
+        raise e
 
 if __name__ == "__main__":
     calculate_index()
