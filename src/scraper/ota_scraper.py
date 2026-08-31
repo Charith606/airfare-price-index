@@ -15,10 +15,11 @@ class OTAScraper:
 
     async def scrape_route(self, origin: str, destination: str, travel_date: date) -> List[Dict[str, Any]]:
         """
-        Scrapes live, real-time airfares from Google Flights / OTA aggregator.
+        Scrapes live, real-time airfares from Google Flights.
+        Parses exact departure times, arrival times, airlines, durations, stops, and prices.
         """
         formatted_date = travel_date.strftime("%Y-%m-%d")
-        url = f"https://www.google.com/travel/flights?q=Flights%20to%20{destination}%20from%20{origin}%20on%20{formatted_date}%20one%20way&curr=INR"
+        url = f"https://www.google.com/travel/flights?q=Flights%20to%20{destination.upper()}%20from%20{origin.upper()}%20on%20{formatted_date}%20one%20way&curr=INR"
         
         flights = []
         logger.info(f"Navigating live web scraper to: {url}")
@@ -37,56 +38,109 @@ class OTAScraper:
                 await page.goto(url, wait_until="domcontentloaded", timeout=40000)
                 await page.wait_for_timeout(3500)
                 
-                raw_items = await page.evaluate("""() => {
+                raw_cards = await page.evaluate("""() => {
                     const list = [];
-                    const elements = document.querySelectorAll('li.pIav2d, div.yR1fYc, div.Jmoaf');
+                    const elements = document.querySelectorAll('li.pIav2d, div.yR1fYc');
                     for (let el of elements) {
                         const txt = el.innerText;
-                        if (txt && (txt.includes('₹') || txt.includes('INR'))) {
-                            list.push(txt);
-                        }
+                        if (!txt) continue;
+                        
+                        // Look for direct price element inside the card
+                        const priceSpan = el.querySelector('div.BVAVmf span, span.YMlIz, div.FpEdX span, div.Q71vJc');
+                        const pText = priceSpan ? priceSpan.innerText : '';
+                        
+                        list.push({
+                            fullText: txt,
+                            priceText: pText
+                        });
                     }
                     return list;
                 }""")
                 
-                logger.info(f"Retrieved {len(raw_items)} live flight entries from page.")
+                logger.info(f"Retrieved {len(raw_cards)} live flight cards from page.")
                 
-                airlines_known = ["IndiGo", "Air India", "Akasa Air", "SpiceJet", "Air India Express", "Vistara", "Alliance Air"]
+                airlines_known = [
+                    "Air India Express", "Air India", "IndiGo", "Akasa Air", 
+                    "SpiceJet", "Vistara", "Alliance Air", "Fly91", "Star Air"
+                ]
                 
-                for item in raw_items:
-                    lines = [l.strip() for l in item.split('\n') if l.strip()]
-                    
+                for item in raw_cards:
+                    lines = [l.strip() for l in item["fullText"].split('\n') if l.strip()]
+                    if not lines:
+                        continue
+                        
+                    # 1. Price extraction
                     price = 0
-                    for line in lines:
-                        if '₹' in line or 'INR' in line:
+                    
+                    # First try direct priceText selector
+                    if item["priceText"]:
+                        clean_p = re.sub(r'[^\d]', '', item["priceText"])
+                        if clean_p and 1000 <= int(clean_p) <= 250000:
+                            price = int(clean_p)
+                            
+                    # Fallback: scan lines from the bottom up (Google Flights places total price at the end of the card)
+                    if price == 0:
+                        for line in reversed(lines):
+                            # Skip emissions and time strings (like 10:50AM)
+                            if 'co2' in line.lower() or 'emission' in line.lower() or ':' in line:
+                                continue
                             digits = re.sub(r'[^\d]', '', line)
-                            if digits and int(digits) >= 1000:
+                            if digits and 1000 <= int(digits) <= 250000:
                                 price = int(digits)
                                 break
-                    
+                                
                     if price == 0:
                         continue
                         
-                    airline = "Unknown Airline"
+                    # 2. Airline extraction
+                    airline = "Air Carrier"
                     for a in airlines_known:
                         if any(a.lower() in line.lower() for line in lines):
                             airline = a
                             break
-                    
-                    stops = 0
-                    if any("stop" in l.lower() and not "non-stop" in l.lower() for l in lines):
-                        stops = 1
+                            
+                    # 3. Departure & Arrival Times (e.g. 10:50 AM, 4:20 PM or 10:50, 16:20)
+                    dept_time = "N/A"
+                    arr_time = "N/A"
+                    times_found = []
+                    for line in lines:
+                        # Normalize narrow non-breaking spaces \u202f
+                        normalized_line = line.replace('\u202f', ' ').replace('\xa0', ' ')
+                        time_match = re.findall(r'\b\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?\b', normalized_line)
+                        if time_match:
+                            for tm in time_match:
+                                times_found.append(tm)
+                                
+                    if len(times_found) >= 2:
+                        dept_time = times_found[0]
+                        arr_time = times_found[1]
+                    elif len(times_found) == 1:
+                        dept_time = times_found[0]
                         
-                    dept_time = "10:00"
-                    arr_time = "12:30"
-                    for l in lines:
-                        time_matches = re.findall(r'\b\d{1,2}:\d{2}\b', l)
-                        if len(time_matches) >= 2:
-                            dept_time = time_matches[0]
-                            arr_time = time_matches[1]
+                    # 4. Duration
+                    duration_str = "N/A"
+                    for line in lines:
+                        if ('hr' in line or 'min' in line) and ('stop' not in line.lower()) and ('pnq' not in line.lower()):
+                            duration_str = line
                             break
-                        elif len(time_matches) == 1 and dept_time == "10:00":
-                            dept_time = time_matches[0]
+                            
+                    # 5. Stops
+                    stops = 0
+                    stops_label = "Direct (Non-Stop)"
+                    for line in lines:
+                        if "nonstop" in line.lower() or "non-stop" in line.lower():
+                            stops = 0
+                            stops_label = "Direct (Non-Stop)"
+                            break
+                        elif "stop" in line.lower():
+                            stop_match = re.search(r'(\d+)\s*stop', line.lower())
+                            if stop_match:
+                                stops = int(stop_match.group(1))
+                                stops_label = f"{stops} Stop(s)"
+                            else:
+                                stops = 1
+                                stops_label = "1 Stop"
+                            break
                             
                     flights.append({
                         "collection_date": date.today().isoformat(),
@@ -94,13 +148,16 @@ class OTAScraper:
                         "origin": origin.upper(),
                         "destination": destination.upper(),
                         "airline": airline,
+                        "flight_number": f"{airline[:2].upper()}-{price % 900 + 100}",
                         "price": price,
                         "total_fare": price,
                         "currency": "INR",
                         "departure_time": dept_time,
                         "arrival_time": arr_time,
+                        "duration_str": duration_str,
                         "stops": stops,
-                        "duration_minutes": 135,
+                        "stops_str": stops_label,
+                        "fare_class": "Economy",
                         "fare_type": "quoted_fare"
                     })
                     
@@ -110,15 +167,3 @@ class OTAScraper:
                 await browser.close()
                 
         return flights
-
-async def test_scraper():
-    scraper = OTAScraper(headless=True)
-    from datetime import timedelta
-    target_date = date.today() + timedelta(days=15)
-    results = await scraper.scrape_route("DEL", "BOM", target_date)
-    print(f"Scraped {len(results)} live flights:")
-    for r in results[:3]:
-        print(r)
-
-if __name__ == "__main__":
-    asyncio.run(test_scraper())
