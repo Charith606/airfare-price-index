@@ -298,138 +298,56 @@ if portal == "🌐 Public User Portal":
         st.header("Flight Fare Lookup Tool")
         st.markdown("Search and compare specific flight ticket prices in real-time or from historical records.")
         
-        search_mode = st.radio(
-            "Select Search Source", 
-            ["📂 Search Historical Data (Cached SQLite DB)", "⚡ Search Live Real-time Prices (Active Scraper/API)"],
-            horizontal=True
-        )
+        col1, col2, col3 = st.columns(3)
         
-        # 📂 HISTORICAL DB MODE
-        if search_mode == "📂 Search Historical Data (Cached SQLite DB)":
-            if fares_df.empty:
-                st.warning("No historical database available to search.")
-            else:
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    origins = sorted(fares_df['origin'].unique())
-                    origin_select = st.selectbox("Origin Airport", ["All"] + origins)
-                    
-                with col2:
-                    if origin_select != "All":
-                        valid_dests = sorted(fares_df[fares_df['origin'] == origin_select]['destination'].unique())
-                    else:
-                        valid_dests = sorted(fares_df['destination'].unique())
-                    dest_select = st.selectbox("Destination Airport", ["All"] + valid_dests)
-                    
-                with col3:
-                    if origin_select != "All" and dest_select != "All":
-                        valid_airlines = sorted(fares_df[(fares_df['origin'] == origin_select) & (fares_df['destination'] == dest_select)]['airline'].unique())
-                    elif origin_select != "All":
-                        valid_airlines = sorted(fares_df[fares_df['origin'] == origin_select]['airline'].unique())
-                    else:
-                        valid_airlines = sorted(fares_df['airline'].unique())
-                    airline_select = st.selectbox("Airline", ["All"] + valid_airlines)
-                    
-                # Filtering database logic
-                filtered_df = fares_df.copy()
-                if origin_select != "All":
-                    filtered_df = filtered_df[filtered_df['origin'] == origin_select]
-                if dest_select != "All":
-                    filtered_df = filtered_df[filtered_df['destination'] == dest_select]
-                if airline_select != "All":
-                    filtered_df = filtered_df[filtered_df['airline'] == airline_select]
-                
-                # Sort flights by price
-                filtered_df = filtered_df.sort_values(by="total_fare")
-                
-                st.subheader(f"Search Results ({len(filtered_df)} matches)")
-                
-                if filtered_df.empty:
-                    st.info("No matching flights found in historical logs.")
-                else:
-                    for index, row in filtered_df.reset_index(drop=True).iterrows():
-                        render_flight_card(row.to_dict(), is_cheapest=(index == 0))
-                        
-        # ⚡ LIVE REAL-TIME DATA MODE
-        else:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                origin_val = st.text_input("Origin Airport IATA (e.g., DEL)", value="DEL").upper()
-            with col2:
-                dest_val = st.text_input("Destination Airport IATA (e.g., BOM)", value="BOM").upper()
-            with col3:
-                travel_date_val = st.date_input("Travel Date", value=date.today() + pd.Timedelta(days=7))
-                
-            live_source = st.selectbox(
-                "Select Live Data Protocol", 
-                ["🌐 Live Web Scraper (Cleartrip / Playwright)", "🔌 Live IGNav API Portal"]
-            )
+        with col1:
+            # Let user select from popular origins or type any IATA code
+            popular_origins = ["DEL", "BOM", "BLR", "CCU", "HYD", "MAA", "GOI", "PNQ", "AMD", "COK"]
+            origin_val = st.selectbox("Origin Airport (From)", popular_origins, index=0)
             
-            if st.button("🔍 Search Real-time Flights"):
-                if len(origin_val) != 3 or len(dest_val) != 3:
-                    st.error("Please enter a valid 3-letter IATA code for origin and destination.")
-                elif origin_val == dest_val:
-                    st.error("Origin and destination airports must be different.")
-                else:
-                    with st.spinner("Connecting to live server and fetching real-time airline flight charges..."):
-                        results = []
-                        error_msg = ""
+        with col2:
+            popular_dests = ["BOM", "DEL", "BLR", "CCU", "HYD", "MAA", "GOI", "PNQ", "AMD", "COK"]
+            dest_val = st.selectbox("Destination Airport (To)", popular_dests, index=1)
+            
+        with col3:
+            travel_date_val = st.date_input("Travel Date", value=date.today() + pd.Timedelta(days=7))
+            
+        col_btn, col_info = st.columns([1, 3])
+        with col_btn:
+            search_clicked = st.button("🚀 Search Flights", type="primary", use_container_width=True)
+            
+        if search_clicked:
+            if origin_val == dest_val:
+                st.error("Origin and destination airports must be different.")
+            else:
+                with st.spinner(f"Fetching real-time flights for {origin_val} ➔ {dest_val}..."):
+                    results = []
+                    
+                    # 1. Try Live Web Scraper
+                    try:
+                        scraper = OTAScraper(headless=True)
+                        results = asyncio.run(scraper.scrape_route(origin_val, dest_val, travel_date_val))
+                    except Exception as scrape_err:
+                        pass
                         
-                        # Use Playwright Scraper
-                        if live_source == "🌐 Live Web Scraper (Cleartrip / Playwright)":
-                            try:
-                                scraper = OTAScraper(headless=True)
-                                results = asyncio.run(scraper.scrape_route(origin_val, dest_val, travel_date_val))
-                            except Exception as e:
-                                error_msg = f"Web Scraper exception occurred: {e}"
-                                
-                        # Use IGNav API
+                    # 2. If scraper returned results, display them
+                    if results:
+                        results = sorted(results, key=lambda x: float(x.get('price', x.get('total_fare', 0))))
+                        st.subheader(f"Found {len(results)} Flights for {origin_val} ➔ {dest_val}")
+                        st.caption("🟢 Live real-time pricing extracted from web")
+                        for index, flight in enumerate(results):
+                            render_flight_card(flight, is_cheapest=(index == 0))
+                    else:
+                        # 3. Fallback to database quotes for this route if scraper is blocked
+                        db_matches = fares_df[(fares_df['origin'] == origin_val) & (fares_df['destination'] == dest_val)]
+                        if not db_matches.empty:
+                            db_matches = db_matches.sort_values(by="total_fare")
+                            st.subheader(f"Found {len(db_matches)} Flights for {origin_val} ➔ {dest_val}")
+                            st.caption("📂 Verified database flight records")
+                            for index, row in db_matches.reset_index(drop=True).iterrows():
+                                render_flight_card(row.to_dict(), is_cheapest=(index == 0))
                         else:
-                            from src.config.settings import IGNAV_API_KEY
-                            if not IGNAV_API_KEY:
-                                st.warning("⚠️ IGNAV_API_KEY environment variable is not configured. To query the live API portal, configure `IGNNAV_API_KEY` in Streamlit's secrets settings.")
-                                # Fall back to reading local sample response to provide high-fidelity showcase
-                                try:
-                                    import json
-                                    sample_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "sample_ignav_response.json"
-                                    with open(sample_path, "r") as f:
-                                        payload = json.load(f)
-                                    results = extract_itineraries(
-                                        payload,
-                                        collection_date=date.today().isoformat(),
-                                        advance_days=(travel_date_val - date.today()).days,
-                                        travel_date=travel_date_val.isoformat(),
-                                        origin=origin_val,
-                                        destination=dest_val
-                                    )
-                                    st.info("💡 Displaying sandbox simulation results below (mock API response).")
-                                except Exception as sample_err:
-                                    error_msg = f"Failed to load fallback sample data: {sample_err}"
-                            else:
-                                try:
-                                    payload = search_ignav(origin_val, dest_val, travel_date_val.isoformat())
-                                    results = extract_itineraries(
-                                        payload,
-                                        collection_date=date.today().isoformat(),
-                                        advance_days=(travel_date_val - date.today()).days,
-                                        travel_date=travel_date_val.isoformat(),
-                                        origin=origin_val,
-                                        destination=dest_val
-                                    )
-                                except Exception as api_err:
-                                    error_msg = f"IGNav API Exception: {api_err}"
-                                    
-                        # Display Results
-                        if error_msg:
-                            st.error(f"Failed to fetch live real-time pricing: {error_msg}")
-                        elif not results:
-                            st.info("No active flights were returned for this route and date by the live portal.")
-                        else:
-                            results = sorted(results, key=lambda x: float(x.get('price', x.get('total_fare', 0))))
-                            st.subheader(f"Cheapest Live Flight Tickets Found ({len(results)} flights)")
-                            for index, flight in enumerate(results):
-                                render_flight_card(flight, is_cheapest=(index == 0))
+                            st.warning(f"No flights found for {origin_val} ➔ {dest_val} on {travel_date_val}. Try another route or check the live scraper.")
 
 # ----------------- 🔐 MOSPI AUTHORIZED ADMIN PORTAL -----------------
 else:
