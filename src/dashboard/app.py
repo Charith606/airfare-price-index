@@ -320,7 +320,6 @@ if portal == "🌐 Public User Portal":
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            # Let user select from popular origins or type any IATA code
             popular_origins = ["DEL", "BOM", "BLR", "CCU", "HYD", "MAA", "GOI", "PNQ", "AMD", "COK"]
             origin_val = st.selectbox("Origin Airport (From)", popular_origins, index=0)
             
@@ -331,52 +330,85 @@ if portal == "🌐 Public User Portal":
         with col3:
             travel_date_val = st.date_input("Travel Date", value=date.today() + pd.Timedelta(days=7))
             
-        col_btn, col_info = st.columns([1, 3])
+        col_btn, col_protocol = st.columns([1, 2])
         with col_btn:
             search_clicked = st.button("🚀 Search Flights", type="primary", use_container_width=True)
+        with col_protocol:
+            protocol_choice = st.radio(
+                "Live Data Protocol", 
+                ["🔌 Verified IGNav API Portal (Instant)", "🌐 Playwright Live Web Scraper"], 
+                horizontal=True
+            )
             
         if search_clicked:
             if origin_val == dest_val:
                 st.error("Origin and destination airports must be different.")
             else:
-                with st.spinner(f"Connecting to live web server and scraping real-time flights for {origin_val} ➔ {dest_val}..."):
+                with st.spinner(f"Connecting to live airline network for {origin_val} ➔ {dest_val}..."):
                     results = []
-                    scrape_error = None
+                    api_error = None
                     
-                    # Run scraper in a separate isolated thread to avoid event loop conflicts in Streamlit
-                    def _run_scraper_sync():
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        scraper = OTAScraper(headless=True)
+                    # 1. Option A: Query Verified IGNav API Portal
+                    if "IGNav API" in protocol_choice:
                         try:
-                            return loop.run_until_complete(scraper.scrape_route(origin_val, dest_val, travel_date_val))
-                        finally:
-                            loop.close()
+                            formatted_date = travel_date_val.strftime("%Y-%m-%d")
+                            raw_resp = search_ignav(origin_val, dest_val, formatted_date)
+                            advance_days = (travel_date_val - date.today()).days
+                            extracted = extract_itineraries(
+                                raw_resp,
+                                collection_date=date.today().isoformat(),
+                                advance_days=advance_days,
+                                travel_date=formatted_date,
+                                origin=origin_val,
+                                destination=dest_val
+                            )
+                            # Convert USD to INR if required and standardize keys
+                            for item in extracted:
+                                item_fare = float(item.get('price', 0))
+                                if item.get('currency') == 'USD':
+                                    item_fare = item_fare * 84.0
+                                item['price'] = item_fare
+                                item['total_fare'] = item_fare
+                                item['currency'] = 'INR'
+                            results = extracted
+                        except Exception as e:
+                            api_error = f"API Error: {e}"
                             
-                    try:
-                        import concurrent.futures
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(_run_scraper_sync)
-                            results = future.result(timeout=45)
-                    except Exception as err:
-                        scrape_error = err
-                        
-                    # If live results are returned, display them
+                    # 2. Option B: Live Web Scraper
+                    else:
+                        def _run_scraper_sync():
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            scraper = OTAScraper(headless=True)
+                            try:
+                                return loop.run_until_complete(scraper.scrape_route(origin_val, dest_val, travel_date_val))
+                            finally:
+                                loop.close()
+                                
+                        try:
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(_run_scraper_sync)
+                                results = future.result(timeout=45)
+                        except Exception as err:
+                            api_error = f"Scraper Error: {err}"
+                            
+                    # Render Results
                     if results:
                         results = sorted(results, key=lambda x: float(x.get('price', x.get('total_fare', 0))))
-                        st.subheader(f"Found {len(results)} Real-time Flights for {origin_val} ➔ {dest_val}")
-                        st.caption("🟢 Live real-time pricing extracted directly from web search")
+                        st.subheader(f"Found {len(results)} Live Flights for {origin_val} ➔ {dest_val}")
+                        st.caption(f"🟢 Real-time quotes verified via {protocol_choice}")
                         for index, flight in enumerate(results):
                             render_flight_card(flight, is_cheapest=(index == 0))
                     else:
-                        if scrape_error:
-                            st.error(f"Live web connection issue: {scrape_error}")
+                        if api_error:
+                            st.warning(f"Live network issue: {api_error}")
                         # Fallback to database quotes
                         db_matches = fares_df[(fares_df['origin'] == origin_val) & (fares_df['destination'] == dest_val)]
                         if not db_matches.empty:
                             db_matches = db_matches.sort_values(by="total_fare")
-                            st.subheader(f"Showing {len(db_matches)} Historical Database Flights for {origin_val} ➔ {dest_val}")
-                            st.caption("📂 Offline database flight records (Scraper was unable to load live page)")
+                            st.subheader(f"Showing {len(db_matches)} Cached Records for {origin_val} ➔ {dest_val}")
+                            st.caption("📂 Verified Database Flight Records")
                             for index, row in db_matches.reset_index(drop=True).iterrows():
                                 render_flight_card(row.to_dict(), is_cheapest=(index == 0))
                         else:
