@@ -567,20 +567,21 @@ else:
                         )
                     },
                     hide_index=True,
-                    use_container_width=True
+                    use_container_width=True,
+                    key="dgca_routes_editor"
                 )
                 
-                if st.button("Save Changes to DB"):
+                if st.button("💾 Save Changes to DB", type="primary", key="save_route_weights_btn"):
                     try:
                         conn = sqlite3.connect(str(DB_PATH))
                         for index, row in edited_df.iterrows():
                             conn.execute(
                                 "UPDATE routes SET route_weight = ? WHERE id = ?",
-                                (row['route_weight'], row['id'])
+                                (float(row['route_weight']), int(row['id']))
                             )
                         conn.commit()
                         conn.close()
-                        st.success("Successfully updated sector weights database configurations!")
+                        st.success("✅ Successfully updated sector weights in database!")
                         st.cache_data.clear()
                     except Exception as e:
                         st.error(f"Failed to update route config settings: {e}")
