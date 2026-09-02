@@ -494,14 +494,8 @@ else:
             st.header("Scraper Pipeline Dashboard")
             st.markdown("Initiate live web scraping and compile new Airfare Price Index data.")
             
-            st.markdown(
-                """
-                <div style="background-color:#e8f4fd; border-left: 5px solid #2196f3; padding: 12px; border-radius: 4px; margin-bottom: 20px;">
-                    <strong>ℹ️ Backend Scraping Execution</strong><br>
-                    Running the live scraper queries all active flight sectors from your database, extracts real-time quotes using Playwright or the IGNav API, runs data cleaning steps (removing outliers), and recalculates the daily APIx index.
-                </div>
-                """,
-                unsafe_allow_html=True
+            st.info(
+                "ℹ️ **Backend Scraping Execution**: Running the live scraper queries all active flight sectors from your database, extracts real-time quotes using Playwright or the IGNav API, runs data cleaning steps (removing outliers), and recalculates the daily APIx index."
             )
             
             # Setup columns for the controls
@@ -601,26 +595,52 @@ else:
             col3.metric("Daily Index Entries", stats["index"])
             col4.metric("Configured Routes", stats["routes"])
             
-            st.subheader("Database Backups")
-            st.markdown(
-                """
-                <div style="background-color:#fff3cd; border-left: 5px solid #ffc107; padding: 12px; border-radius: 4px; margin-bottom: 20px;">
-                    <strong>⚠️ SQLite Database File Download</strong><br>
-                    SQLite database files (.db) are compressed binary formats. If you try to open the downloaded file directly on Windows, you may receive a <i>"This file does not have an app associated with it..."</i> warning.
-                    To inspect the contents, use a database viewer like <a href="https://sqlitebrowser.org/" target="_blank">DB Browser for SQLite</a>, or import it into a Python pandas script.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown("### 📊 Export Clean Data for Microsoft Excel")
+            st.markdown("Download database tables directly as clean CSV spreadsheets that open formatted in Microsoft Excel:")
             
-            try:
-                with open(str(DB_PATH), "rb") as db_file:
-                    db_bytes = db_file.read()
-                st.download_button(
-                    label="📥 Download SQLite Database File",
-                    data=db_bytes,
-                    file_name="airfare_index.db",
-                    mime="application/octet-stream"
-                )
-            except Exception as e:
-                st.error(f"Error preparing DB file for download: {e}")
+            d_col1, d_col2, d_col3 = st.columns(3)
+            
+            # 1. Cleaned Fares CSV
+            with d_col1:
+                fares_df = load_fares_data()
+                if not fares_df.empty:
+                    csv_fares = fares_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📗 Download Cleaned Fares (Excel CSV)",
+                        data=csv_fares,
+                        file_name="cleaned_airfares.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    
+            # 2. Daily Price Index CSV
+            with d_col2:
+                index_df = load_index_data()
+                if not index_df.empty:
+                    csv_index = index_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📈 Download Price Index (Excel CSV)",
+                        data=csv_index,
+                        file_name="daily_price_index.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    
+            # 3. Raw SQLite DB
+            with d_col3:
+                try:
+                    with open(str(DB_PATH), "rb") as db_file:
+                        db_bytes = db_file.read()
+                    st.download_button(
+                        label="🗄️ Download SQLite (.db) File",
+                        data=db_bytes,
+                        file_name="airfare_index.db",
+                        mime="application/octet-stream",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"Error preparing DB file: {e}")
+                    
+            st.markdown("### 🔍 Live Database Preview (Cleaned Fares)")
+            if not fares_df.empty:
+                st.dataframe(fares_df.head(100), use_container_width=True)
